@@ -1,7 +1,9 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+
     db_name: str
     db_user: str
     db_password: str
@@ -16,12 +18,10 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        # TODO: return the asyncpg connection string
-        # format: postgresql+asyncpg://user:password@host:port/dbname
-        raise NotImplementedError
-
-    class Config:
-        env_file = ".env"
+        return (
+            f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
 
 
 settings = Settings()

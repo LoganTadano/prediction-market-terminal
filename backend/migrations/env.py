@@ -7,17 +7,18 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Import your Base and all models so Alembic can detect schema changes
-# TODO: uncomment once models.py exists
-# from database import Base
-# import models  # noqa: F401
+from database import Base
+from config import settings
+import models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# TODO: set target_metadata = Base.metadata once models exist
-target_metadata = None
+# Override whatever is in alembic.ini with the real URL from settings/.env
+config.set_main_option("sqlalchemy.url", settings.database_url)
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
