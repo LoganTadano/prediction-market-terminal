@@ -2,16 +2,24 @@
 Kalshi ingestion client.
 
 Docs: https://trading-api.kalshi.com/trade-api/v2/
-Auth: The v2 API uses RSA-signed requests. For read-only endpoints a plain
-      Bearer header works in some environments; production requires HMAC signing.
-      See config.py — kalshi_api_key and kalshi_api_secret are both wired up.
+Auth: RSA-signed requests (PKCS1v15 + SHA-256). Each request is signed with
+      your private key so Kalshi can verify it came from you. The signature
+      covers (timestamp_ms + METHOD + path), which also prevents replay attacks.
+
+      Required env vars:
+        KALSHI_API_KEY     — your key UUID from the Kalshi dashboard
+        KALSHI_API_SECRET  — PEM contents of your RSA private key (with real newlines)
 """
 
+import base64
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 from config import settings
 
@@ -53,13 +61,47 @@ class KalshiSnapshot:
     timestamp: datetime
 
 
+class KalshiAuth(httpx.Auth):
+    """
+    Per-request RSA signer for the Kalshi v2 trading API.
+
+    httpx calls auth_flow() before each request so we can stamp a fresh
+    timestamp and path-specific signature onto the headers.
+
+    Kalshi verifies three headers:
+      Kalshi-Access-Key        — identifies which public key to check against
+      Kalshi-Access-Timestamp  — milliseconds since epoch (prevents replay)
+      Kalshi-Access-Signature  — base64(RSA_SHA256(timestamp + METHOD + path))
+    """
+
+    def __init__(self, api_key: str, private_key_path: str):
+        self.api_key = api_key
+        with open(private_key_path, "rb") as f:
+            self._private_key = serialization.load_pem_private_key(f.read(), password=None)
+
+    def auth_flow(self, request: httpx.Request):
+        timestamp_ms = int(time.time() * 1000)
+        message = str(timestamp_ms) + request.method + request.url.raw_path.decode()
+        signature_bytes = self._private_key.sign(
+            message.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256()
+        )
+        signature_b64 = base64.b64encode(signature_bytes).decode("utf-8")
+
+        request.headers["Kalshi-Access-Key"] = self.api_key
+        request.headers["Kalshi-Access-Timestamp"] = str(timestamp_ms)
+        request.headers["Kalshi-Access-Signature"] = signature_b64
+
+        yield request
+
+
 def _build_client() -> httpx.AsyncClient:
-    headers = {"Accept": "application/json"}
-    if settings.kalshi_api_key:
-        headers["Authorization"] = f"Bearer {settings.kalshi_api_key}"
+    auth = None
+    if settings.kalshi_api_key and settings.kalshi_private_key_path:
+        auth = KalshiAuth(settings.kalshi_api_key, settings.kalshi_private_key_path)
     return httpx.AsyncClient(
         base_url=BASE_URL,
-        headers=headers,
+        headers={"Accept": "application/json"},
+        auth=auth,
         timeout=httpx.Timeout(10.0, connect=5.0),
     )
 

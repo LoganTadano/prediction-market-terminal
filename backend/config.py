@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     db_port: int = 5432
 
     kalshi_api_key: str = ""
-    kalshi_api_secret: str = ""
+    kalshi_private_key_path: str = ""
     polymarket_api_key: str = ""
 
     environment: str = "development"
