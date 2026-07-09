@@ -1,5 +1,6 @@
 .env
 backend/secrets/
+*.pem
 __pycache__/
 *.pyc
 *.pyo
