@@ -29,7 +29,14 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(db: AsyncSession = Depends(get_db)) -> StatsResponse:
-    """Per-platform market/snapshot counts plus last-hour ingestion activity."""
+    """
+    Per-platform market/snapshot counts plus last-hour ingestion activity.
+
+    price_snapshots is multi-million rows and only growing, so this pulls
+    count/max/last-hour-count in a single grouped pass (via FILTER) instead
+    of three separate full scans — that alone was costing several seconds
+    per dashboard poll.
+    """
     market_counts = dict(
         (row.platform, row.count)
         for row in (
@@ -40,40 +47,23 @@ async def get_stats(db: AsyncSession = Depends(get_db)) -> StatsResponse:
             )
         ).all()
     )
-    snapshot_counts = dict(
-        (row.platform, row.count)
-        for row in (
-            await db.execute(
-                select(
-                    PriceSnapshot.platform, func.count(PriceSnapshot.id).label("count")
-                ).group_by(PriceSnapshot.platform)
-            )
-        ).all()
-    )
-    latest_snapshot = dict(
-        (row.platform, row.latest)
-        for row in (
-            await db.execute(
-                select(
-                    PriceSnapshot.platform,
-                    func.max(PriceSnapshot.timestamp).label("latest"),
-                ).group_by(PriceSnapshot.platform)
-            )
-        ).all()
-    )
+
     since = datetime.utcnow() - timedelta(hours=1)
-    last_hour_counts = dict(
-        (row.platform, row.count)
-        for row in (
-            await db.execute(
-                select(
-                    PriceSnapshot.platform, func.count(PriceSnapshot.id).label("count")
-                )
-                .where(PriceSnapshot.timestamp >= since)
-                .group_by(PriceSnapshot.platform)
-            )
-        ).all()
-    )
+    snapshot_stats = (
+        await db.execute(
+            select(
+                PriceSnapshot.platform,
+                func.count(PriceSnapshot.id).label("count"),
+                func.max(PriceSnapshot.timestamp).label("latest"),
+                func.count(PriceSnapshot.id)
+                .filter(PriceSnapshot.timestamp >= since)
+                .label("last_hour"),
+            ).group_by(PriceSnapshot.platform)
+        )
+    ).all()
+    snapshot_counts = {row.platform: row.count for row in snapshot_stats}
+    latest_snapshot = {row.platform: row.latest for row in snapshot_stats}
+    last_hour_counts = {row.platform: row.last_hour for row in snapshot_stats}
 
     platforms = sorted(set(market_counts) | set(snapshot_counts))
     stats = [
